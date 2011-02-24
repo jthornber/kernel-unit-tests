@@ -1,0 +1,3 @@
+This project builds several kernel modules that run unit tests when
+they are insmodded into the kernel.  BEWARE: some of these tests make
+assumptions about which block devices they can scribble over.
