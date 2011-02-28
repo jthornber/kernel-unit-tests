@@ -80,6 +80,9 @@ static void set_byte_(void *context, void *data)
 {
 	unsigned char *as_chars = data;
 	struct sb_context *sbc = (struct sb_context *) context;
+
+	/* FIXME: this appears to zero the multisnap magic byte !
+	   Something weird going on here. */
 	as_chars[sbc->offset] = sbc->v;
 }
 
