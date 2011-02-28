@@ -9,3 +9,6 @@ For example,
 
  ln -s ~/work/RedHat/linux-github/drivers/md md
 
+Build with something like:
+
+ make -C ~/work/RedHat/linux-github/ SUBDIRS=$PWD
