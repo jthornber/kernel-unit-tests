@@ -848,6 +848,571 @@ static int check_snap_scenario1(void)
 	return destroy_mmd(&tc);
 }
 
+/* Scenario 2
+ * 1 - origin <- snap1
+ * 2 - snap1 <- snap2
+ * 3 - write snap1 => IO_MAPPED
+ * 4 - snap1 <- snap3
+ * 5 - read snap2 => IO_MAPPED (!3)
+ * 6 - read snap3 => IO_MAPPED (3)
+ */
+static int check_snap_scenario2(void)
+{
+	int r;
+	unsigned index_snap1, index_snap2, index_snap3;
+	struct test_context tc;
+	block_t block1, block2;
+
+	r = setup_fresh_and_open_thins(&tc, 1);
+	if (r)
+		return r;
+
+	/* make sure one block is mapped on the origin */
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &block1);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 1 */
+	r = multisnap_metadata_create_snap(tc.mmd, 1, 0);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 2 */
+	r = multisnap_metadata_create_snap(tc.mmd, 2, 1);
+	if (r) {
+		printk(KERN_ALERT "snapshot of snapshot failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 3 */
+	r = open_dev(&tc, 1, &index_snap1);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap1], 0, WRITE, 1, &block1);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 4 */
+	r = multisnap_metadata_create_snap(tc.mmd, 3, 1);
+	if (r) {
+		printk(KERN_ALERT "snapshot of snapshot failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 5 */
+	r = open_dev(&tc, 2, &index_snap2);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block2);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block1 == block2) {
+		printk(KERN_ALERT "block match (5)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 6 */
+	r = open_dev(&tc, 3, &index_snap3);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap3], 0, READ, 1, &block2);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block1 != block2) {
+		printk(KERN_ALERT "block differ (5)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	return destroy_mmd(&tc);
+}
+
+/* Scenario 3
+ * 1 - origin1 <- snap1
+ * 2 - origin2 <- snap2
+ * 3 - write snap1 => IO_MAPPED
+ * 4 - read snap1 => IO_MAPPED to (3)
+ * 5 - read snap2 => IO_MAPPED to origin1
+ * 6 - write snap2 => IO_MAPPED
+ * 7 - read snap1 => IO_MAPPED to (3)
+ * 8 - read snap2 => IO_MAPPED to (6)
+ */
+static int check_snap_scenario3(void)
+{
+	int r;
+	int const snap1_dev = 2, snap2_dev = 3;
+	unsigned index_snap1, index_snap2;
+	struct test_context tc;
+	block_t block, result1, result3, result6;
+
+	r = setup_fresh_and_open_thins(&tc, 2);
+	if (r)
+		return r;
+
+	/* make sure one block is mapped on the origin */
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &result1);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[1], 0, WRITE, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 1 */
+	r = multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 2 */
+	r = multisnap_metadata_create_snap(tc.mmd, snap2_dev, 1);
+	if (r) {
+		printk(KERN_ALERT "snapshot of snapshot failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 3 */
+	r = open_dev(&tc, snap1_dev, &index_snap1);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap1], 0, WRITE, 1, &result3);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 4 */
+	r = multisnap_metadata_map(tc.msd[index_snap1], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result3) {
+		printk(KERN_ALERT "block differ (4)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 5 */
+	r = open_dev(&tc, snap2_dev, &index_snap2);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result1) {
+		printk(KERN_ALERT "block differ (5)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 6 */
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, WRITE, 1, &result6);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 7 */
+	r = multisnap_metadata_map(tc.msd[index_snap1], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result3) {
+		printk(KERN_ALERT "blocks differ (7)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 8 */
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result6) {
+		printk(KERN_ALERT "blocks differ (8)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	return destroy_mmd(&tc);
+}
+
+/* Scenario 4
+ * 1 - origin <- snap1
+ * 2 - write snap1 => IO_MAPPED
+ * 3 - snap1 <- snap2
+ * 4 - write snap1 => IO_MAPPED (!2)
+ * 5 - snap1 <- snap3
+ * 6 - read snap2 => IO_MAPPED (2)
+ * 7 - read snap3 => IO_MAPPED (4)
+ */
+static int check_snap_scenario4(void)
+{
+	int r;
+	int const snap1_dev = 1, snap2_dev = 2, snap3_dev = 3;
+	unsigned index_snap1, index_snap2, index_snap3;
+	struct test_context tc;
+	block_t block, result2, result4;
+
+	r = setup_fresh_and_open_thins(&tc, 1);
+	if (r)
+		return r;
+
+	/* make sure one block is mapped on the origin */
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 1 */
+	r = multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 2 */
+	r = open_dev(&tc, snap1_dev, &index_snap1);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap1], 0, WRITE, 1, &result2);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 3 */
+	r = multisnap_metadata_create_snap(tc.mmd, snap2_dev, snap1_dev);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 4 */
+	r = multisnap_metadata_map(tc.msd[index_snap1], 0, WRITE, 1, &result4);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (result4 != result2) {
+		printk(KERN_ALERT "block differ (4)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 5 */
+	r = multisnap_metadata_create_snap(tc.mmd, snap3_dev, snap1_dev);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 6 */
+	r = open_dev(&tc, snap2_dev, &index_snap2);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result2) {
+		printk(KERN_ALERT "block differ (6)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 7 */
+	r = open_dev(&tc, snap3_dev, &index_snap3);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap3], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result4) {
+		printk(KERN_ALERT "block differ (7)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	return destroy_mmd(&tc);
+}
+
+/* Scenario 5
+ * 1 - origin <- snap1
+ *     snap1 <- snap2
+ * 2 - write snap2 => IO_MAPPED
+ * 3 - snap2 <- snap3
+ * 4 - read snap2 => IO_MAPPED (2)
+ * 5 - read snap3 => IO_MAPPED (2)
+ * 6 - write snap2 => IO_MAPPED (not 2)
+ * 7 - read snap2 => IO_MAPPED (6)
+ * 8 - read snap3 => IO_MAPPED (2)
+ * 9 - write snap3 => IO_MAPPED (!2, !6)
+ * 10 - read snap3 => IO_MAPPED (9)
+ * 11 - read snap2 => IO_MAPPED (6)
+ */
+static int check_snap_scenario5(void)
+{
+	int r;
+	int const snap1_dev = 1, snap2_dev = 2, snap3_dev = 3;
+	unsigned index_snap2, index_snap3;
+	struct test_context tc;
+	block_t block, result2, result6, result9;
+
+	r = setup_fresh_and_open_thins(&tc, 1);
+	if (r)
+		return r;
+
+	/* make sure one block is mapped on the origin */
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 1 */
+	r = multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_create_snap(tc.mmd, snap2_dev, snap1_dev);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 2 */
+	r = open_dev(&tc, snap2_dev, &index_snap2);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, WRITE, 1, &result2);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 3 */
+	r = multisnap_metadata_create_snap(tc.mmd, snap3_dev, snap2_dev);
+	if (r) {
+		printk(KERN_ALERT "mmd_create_snap failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 4 */
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result2) {
+		printk(KERN_ALERT "block differ (4)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 5 */
+	r = open_dev(&tc, snap3_dev, &index_snap3);
+	if (r) {
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index_snap3], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result2) {
+		printk(KERN_ALERT "block differ (5)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 6 */
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, WRITE, 1, &result6);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (result6 == result2) {
+		printk(KERN_ALERT "block same (6)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 7 */
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result6) {
+		printk(KERN_ALERT "block differ (7)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 8 */
+	r = multisnap_metadata_map(tc.msd[index_snap3], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result2) {
+		printk(KERN_ALERT "block differ (8)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 9 */
+	r = multisnap_metadata_map(tc.msd[index_snap3], 0, WRITE, 1, &result9);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if ((result9 == result2) || (result9 == result6)) {
+		printk(KERN_ALERT "block same (9)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 10 */
+	r = multisnap_metadata_map(tc.msd[index_snap3], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result9) {
+		printk(KERN_ALERT "block differ (10)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	/* 11 */
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result6) {
+		printk(KERN_ALERT "block differ (11)");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	return destroy_mmd(&tc);
+
+}
+
 static int check_get_workqueue(void)
 {
 	int r;
@@ -919,7 +1484,11 @@ static int multisnap_metadata_test_init(void)
 
 		{"create snapshot",		                 check_create_snapshot},
 		{"fresh snapshots have same mappings as origin", check_fresh_snapshot_has_same_mappings},
-		{"snapshot scenario1",                           check_snap_scenario1},
+		{"snapshot scenario 1",                           check_snap_scenario1},
+		{"snapshot scenario 2",                           check_snap_scenario2},
+		{"snapshot scenario 3",                           check_snap_scenario3},
+		{"snapshot scenario 4",                           check_snap_scenario4},
+		{"snapshot scenario 5",                           check_snap_scenario5},
 		{"get workqueue", check_get_workqueue},
 	};
 
