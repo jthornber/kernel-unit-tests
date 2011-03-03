@@ -109,6 +109,8 @@ static int create_mmd(struct test_context *tc)
 {
 	int mode = FMODE_READ | FMODE_WRITE | FMODE_EXCL;
 
+	memset(tc, 0, sizeof(*tc));
+
 	tc->bdev = blkdev_get_by_path(TEST_DEVICE, mode, &create_mmd);
 	if (IS_ERR(tc->bdev))
 		return -1;
@@ -159,7 +161,6 @@ static int setup_fresh_mmd(struct test_context *tc)
 		return r;
 	}
 
-	memset(tc, 0, sizeof(*tc));
 	return create_mmd(tc);
 }
 
@@ -1413,6 +1414,67 @@ static int check_snap_scenario5(void)
 
 }
 
+static int check_devices_persist(void)
+{
+	int r;
+	struct test_context tc;
+	block_t block, result1;
+	unsigned index;
+
+	r = setup_fresh_and_open_thins(&tc, 1);
+	if (r)
+		return r;
+
+	/* make sure one block is mapped on the origin */
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &result1);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_commit(tc.mmd);
+	if (r) {
+		printk(KERN_ALERT "commit failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = destroy_mmd(&tc);
+	if (r) {
+		printk(KERN_ALERT "destroy_mmd failed");
+		return r;
+	}
+
+	r = create_mmd(&tc);
+	if (r) {
+		printk(KERN_ALERT "couldn't recreate mmd");
+		return r;
+	}
+
+	r = open_dev(&tc, 0, &index);
+	if (r) {
+		printk(KERN_ALERT "couldn't reopen device");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index], 0, READ, 1, &block);
+	if (r) {
+		printk(KERN_ALERT "mmd_map failed");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	if (block != result1) {
+		printk(KERN_ALERT "blocks differ");
+		destroy_mmd(&tc);
+		return r;
+	}
+
+	return destroy_mmd(&tc);
+}
+
 static int check_get_workqueue(void)
 {
 	int r;
@@ -1458,8 +1520,8 @@ static int multisnap_metadata_test_init(void)
 		{"create new metadata device",	     check_create_mmd},
 		{"reopen metadata device",	     check_reopen_mmd},
 		{"reopen a bad superblock",	     check_reopen_bad_fails},
-		{"reopen a slightly bad superblock", check_reopen_slightly_bad_fails},
-
+		// {"reopen a slightly bad superblock", check_reopen_slightly_bad_fails},
+		
 		/* creation of virtual devices within the mmd */
 		{"open non existent virtual device fails",	check_open_bad_msd},
 		{"create a thin virtual device succeeds",	check_create_thin_msd},
@@ -1489,6 +1551,9 @@ static int multisnap_metadata_test_init(void)
 		{"snapshot scenario 3",                           check_snap_scenario3},
 		{"snapshot scenario 4",                           check_snap_scenario4},
 		{"snapshot scenario 5",                           check_snap_scenario5},
+
+		{"devices persist",    check_devices_persist},
+
 		{"get workqueue", check_get_workqueue},
 	};
 
