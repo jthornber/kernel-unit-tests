@@ -173,7 +173,7 @@ static int setup_fresh_mmd_and_thin(struct test_context *tc,
 	if (r)
 		return r;
 
-	r = multisnap_metadata_create_thin(tc->mmd, id);
+	r = multisnap_metadata_create_thin(tc->mmd, id, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_thin failed");
 		destroy_mmd(tc);
@@ -192,7 +192,7 @@ static int setup_fresh_and_open_thins(struct test_context *tc, unsigned count)
 		return r;
 
 	for (i = 0; i < count; i++) {
-		r = multisnap_metadata_create_thin(tc->mmd, i);
+		r = multisnap_metadata_create_thin(tc->mmd, i, 0);
 		if (r) {
 			printk(KERN_ALERT "mmd_create_thin failed");
 			destroy_mmd(tc);
