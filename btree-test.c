@@ -301,6 +301,340 @@ static int check_insert_h(struct transaction_manager *tm)
 	return 0;
 }
 
+#define MAX_LEVELS 4
+static int do_remove_scenario(struct btree_info *info, block_t root)
+{
+	int i, r;
+	uint64_t key[MAX_LEVELS], bad_key[MAX_LEVELS];
+	__le64 value = 0;
+
+	if (info->levels > MAX_LEVELS) {
+		printk(KERN_ALERT "too many levels");
+		return -1;
+	}
+
+	for (i = 0; i < info->levels - 1; i++) {
+		key[i] = 1;
+		bad_key[i] = 1;
+	}
+	key[i] = 100;
+	bad_key[i] = 101;
+
+	r = btree_insert(info, root, key, &value, &root);
+	if (r) {
+		printk(KERN_ALERT "insert failed");
+		return -1;
+	}
+
+	r = btree_remove(info, root, bad_key, &root);
+	if (r != -ENODATA) {
+		printk(KERN_ALERT "remove1 didn't return -ENODATA");
+		return -1;
+	}
+
+	r = btree_remove(info, root, key, &root);
+	if (r) {
+		printk(KERN_ALERT "remove failed");
+		return r;
+	}
+
+	r = btree_remove(info, root, bad_key, &root);
+	if (r != -ENODATA) {
+		printk(KERN_ALERT "remove2 didn't return -ENODATA");
+		return -1;
+	}
+
+	r = btree_remove(info, root, key, &root);
+	if (r != -ENODATA) {
+		printk(KERN_ALERT "remove3 didn't return -ENODATA");
+		return -1;
+	}
+
+	r = btree_lookup_equal(info, root, key, &value);
+	if (r == 0) {
+		printk(KERN_ALERT "value unexpectedly found");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int check_remove_one(struct transaction_manager *tm)
+{
+	int r;
+	block_t root = 0;
+	struct btree_info info;
+	struct block *superblock;
+
+	info.tm = tm;
+	info.levels = 1;
+	info.value_type.size = sizeof(uint64_t);
+	info.value_type.copy = NULL;
+	info.value_type.del = NULL;
+	info.value_type.equal = NULL;
+
+	r = begin(tm, &superblock);
+	if (r < 0) {
+		printk(KERN_ALERT "begin failed");
+		return r;
+	}
+
+	r = btree_empty(&info, &root);
+	if (r < 0) {
+		printk(KERN_ALERT "btree_empty failed");
+		return r;
+	}
+
+	return do_remove_scenario(&info, root);
+}
+
+static int check_removal_with_internal_nodes(struct transaction_manager *tm)
+{
+	int r;
+	__le64 value = 0;
+	block_t root = 0;
+	struct btree_info info;
+	struct block *superblock;
+
+	info.tm = tm;
+	info.levels = 1;
+	info.value_type.size = sizeof(uint64_t);
+	info.value_type.copy = NULL;
+	info.value_type.del = NULL;
+	info.value_type.equal = NULL;
+
+	r = begin(tm, &superblock);
+	if (r < 0) {
+		printk(KERN_ALERT "begin failed");
+		return r;
+	}
+
+	r = btree_empty(&info, &root);
+	if (r < 0) {
+		printk(KERN_ALERT "btree_empty failed");
+		return r;
+	}
+
+	{
+		/* prime the tree with enough entries that we know there are internal nodes */
+		unsigned c;
+		for (c = 0; c < 1000; c++) {
+			uint64_t k = c + 10000;
+			r = btree_insert(&info, root, &k, &value, &root);
+			if (r) {
+				printk(KERN_ALERT "insert(%u) failed", c);
+				return r;
+			}
+		}
+	}
+
+	return do_remove_scenario(&info, root);
+}
+
+static int check_removal_in_hierarchy(struct transaction_manager *tm)
+{
+	int r;
+	uint64_t key[3];
+	__le64 value = 0;
+	block_t root = 0;
+	struct btree_info info;
+	struct block *superblock;
+
+	info.tm = tm;
+	info.levels = 3;
+	info.value_type.size = sizeof(uint64_t);
+	info.value_type.copy = NULL;
+	info.value_type.del = NULL;
+	info.value_type.equal = NULL;
+
+	r = begin(tm, &superblock);
+	if (r < 0) {
+		printk(KERN_ALERT "begin failed");
+		return r;
+	}
+
+	r = btree_empty(&info, &root);
+	if (r < 0) {
+		printk(KERN_ALERT "btree_empty failed");
+		return r;
+	}
+
+	{
+		/* prime the tree with enough entries that we know there are internal nodes */
+		unsigned c;
+		key[0] = 1;
+		key[1] = 1;
+		for (c = 0; c < 1000; c++) {
+			key[2] = c + 10000;
+			r = btree_insert(&info, root, key, &value, &root);
+			if (r) {
+				printk(KERN_ALERT "insert(%u) failed", c);
+			}
+		}
+	}
+
+	return do_remove_scenario(&info, root);
+}
+
+static int insert_remove_many_scenario(
+	struct transaction_manager *tm,
+	unsigned *order,
+	unsigned count)
+{
+	int r;
+	unsigned c, check;
+	__le64 value = 0;
+	block_t root = 0;
+	struct btree_info info;
+	struct block *superblock;
+
+	info.tm = tm;
+	info.levels = 1;
+	info.value_type.size = sizeof(uint64_t);
+	info.value_type.copy = NULL;
+	info.value_type.del = NULL;
+	info.value_type.equal = NULL;
+
+	r = begin(tm, &superblock);
+	if (r < 0) {
+		printk(KERN_ALERT "begin failed");
+		return r;
+	}
+
+	r = btree_empty(&info, &root);
+	if (r < 0) {
+		printk(KERN_ALERT "btree_empty failed");
+		return r;
+	}
+
+	for (c = 0; c < count; c++) {
+		uint64_t k = order[c];
+		r = btree_insert(&info, root, &k, &value, &root);
+		if (r) {
+			printk(KERN_ALERT "insert(%u) failed", c);
+			return r;
+		}
+	}
+
+	for (check = c + 1; check < count; check++) {
+		uint64_t k = order[check];
+		void *value;
+		r = btree_lookup_equal(&info, root, &k, &value);
+		if (r) {
+			printk(KERN_ALERT "missing %d", order[check]);
+			return r;
+		}
+	}
+
+	for (c = 0; c < count; c++) {
+		uint64_t k = order[c];
+		__le64 value;
+		r = btree_remove(&info, root, &k, &root);
+		if (r) {
+			printk(KERN_ALERT "remove(%u) failed (r = %d)", order[c], r);
+			return r;
+		}
+
+		for (check = c + 1; check < count; check++) {
+			uint64_t k = order[check];
+			r = btree_lookup_equal(&info, root, &k, &value);
+			if (r) {
+				printk(KERN_ALERT "remove(%u) also removed %d", order[c], order[check]);
+				return r;
+			}
+		}
+
+		r = btree_lookup_equal(&info, root, &k, &value);
+		if (!r) {
+			printk(KERN_ALERT "remove didn't work for %d", order[c]);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+#define COUNT 1000
+static int check_insert_remove_many(struct transaction_manager *tm)
+{
+	static unsigned order[COUNT];
+
+	int i;
+
+	for (i = 0; i < COUNT; i++)
+		order[i] = i;
+
+	return insert_remove_many_scenario(tm, order, COUNT);
+}
+
+static int check_insert_remove_many_reverse(struct transaction_manager *tm)
+{
+	static unsigned order[COUNT];
+
+	int i;
+
+	for (i = 0; i < COUNT; i++)
+		order[i] = COUNT - 1 - i;
+
+	return insert_remove_many_scenario(tm, order, COUNT);
+}
+
+// RNG snarfed from wikipedia
+static unsigned random(unsigned limit)
+{
+	static unsigned W = 101;    /* must not be zero */
+	static unsigned Z = 243;    /* must not be zero */
+
+	Z = 36969 * (Z & 65535) + (Z >> 16);
+	W = 18000 * (W & 65535) + (W >> 16);
+	return (((Z << 16) + W) % limit);
+}
+
+static void shuffle(unsigned *array, unsigned count)
+{
+	unsigned i;
+
+	for (i = 0; i < count; i++) {
+		unsigned other = i + random(count - i);
+		unsigned tmp = array[i];
+		array[i] = array[other];
+		array[other] = tmp;
+	}
+}
+
+static int check_insert_remove_many_random(struct transaction_manager *tm)
+{
+	static unsigned order[COUNT];
+
+	int i;
+
+	for (i = 0; i < COUNT; i++)
+		order[i] = i;
+
+	shuffle(order, COUNT);
+	return insert_remove_many_scenario(tm, order, COUNT);
+}
+
+static int check_insert_remove_many_center(struct transaction_manager *tm)
+{
+	static unsigned order[COUNT];
+
+	int i;
+
+	// First a central chunk of values
+	for (i = 0; i < 500; i++)
+		order[i] = i + 300;
+
+	// Then the outliers
+	for (i = 0; i < 300; i++)
+		order[i + 500] = i;
+
+	for (i = 0; i < 200; i++)
+		order[i + 800] = i + 800;
+
+	return insert_remove_many_scenario(tm, order, COUNT);
+}
+
 /*----------------------------------------------------------------*/
 
 static int run_test(const char *name, test_fn fn)
@@ -343,7 +677,14 @@ static int btree_test_init(void)
 		{"lookup in an empty btree", check_lookup_empty},
 		{"check insert", check_insert},
 		{"check insert, commit every 100", check_multiple_commits},
-		{"check hierarchical insert", check_insert_h}
+		{"check hierarchical insert", check_insert_h},
+		{"insert one, remove one", check_remove_one},
+		{"insert many, remove one", check_removal_with_internal_nodes},
+		{"insert many, remove one, hierarchical", check_removal_in_hierarchy},
+		{"repeated insert/remove linear order", check_insert_remove_many},
+		{"repeated insert/remove linear order", check_insert_remove_many_reverse},
+		{"repeated insert/remove random order", check_insert_remove_many_random},
+		{"repeated insert/remove center order", check_insert_remove_many_center},
 	};
 
 	int i;
