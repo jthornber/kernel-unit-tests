@@ -481,15 +481,21 @@ static int check_empty_msd_lookup_fails(void)
 {
 	int r;
 	struct test_context tc;
-	uint64_t value;
+	struct multisnap_map_result mapping;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_map(tc.msd[0], 0, READ, 1, &value);
+	r = multisnap_metadata_map(tc.msd[0], 0, READ, 1, &mapping);
 	if (!r) {
 		printk(KERN_ALERT "mmd_lookup unexpectedly succeeded");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
+	if (mapping.need_copy) {
+		printk(KERN_ALERT "clone unexpectedly set");
 		destroy_mmd(&tc);
 		return -1;
 	}
@@ -501,17 +507,23 @@ static int check_insert_succeeds(void)
 {
 	int r;
 	struct test_context tc;
-	uint64_t value;
+	struct multisnap_map_result mapping;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &value);
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &mapping);
 	if (r) {
 		printk(KERN_ALERT "mmd_insert failed");
 		destroy_mmd(&tc);
 		return r;
+	}
+
+	if (mapping.need_copy) {
+		printk(KERN_ALERT "clone unexpectedly set");
+		destroy_mmd(&tc);
+		return -1;
 	}
 
 	return destroy_mmd(&tc);
@@ -521,28 +533,34 @@ static int check_two_inserts_in_same_device_differ(void)
 {
 	int r;
 	struct test_context tc;
-	uint64_t value1, value2;
+	struct multisnap_map_result result1, result2;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &value1);
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_insert failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_map(tc.msd[0], 1, WRITE, 1, &value2);
+	r = multisnap_metadata_map(tc.msd[0], 1, WRITE, 1, &result2);
 	if (r) {
 		printk(KERN_ALERT "mmd_insert failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	if (value1 == value2) {
+	if (result1.dest == result2.dest) {
 		printk(KERN_ALERT "mmd_inserts mapped to same destination");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
+	if (result1.need_copy || result2.need_copy) {
+		printk(KERN_ALERT "clone unexpectedly set");
 		destroy_mmd(&tc);
 		return -1;
 	}
@@ -554,30 +572,36 @@ static int check_lookup_after_insert(void)
 {
 	int r;
 	struct test_context tc;
-	uint64_t value1, value2;
+	struct multisnap_map_result result1, result2;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &value1);
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_insert failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_map(tc.msd[0], 0, READ, 1, &value2);
+	r = multisnap_metadata_map(tc.msd[0], 0, READ, 1, &result2);
 	if (r) {
 		printk(KERN_ALERT "mmd_lookup failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	if (value1 != value2) {
+	if (result1.dest != result2.dest) {
 		printk(KERN_ALERT "mmd_insert and mmd_lookup returned different blocks");
 		destroy_mmd(&tc);
 		return r;
+	}
+
+	if (result1.need_copy || result2.need_copy) {
+		printk(KERN_ALERT "clone unexpectedly set");
+		destroy_mmd(&tc);
+		return -1;
 	}
 
 	return destroy_mmd(&tc);
@@ -587,28 +611,34 @@ static int check_two_inserts_in_different_devices_differ(void)
 {
 	int r;
 	struct test_context tc;
-	uint64_t value1, value2;
+	struct multisnap_map_result result1, result2;
 
 	r = setup_fresh_and_open_thins(&tc, 2);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &value1);
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_insert failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_map(tc.msd[1], 0, WRITE, 1, &value2);
+	r = multisnap_metadata_map(tc.msd[1], 0, WRITE, 1, &result2);
 	if (r) {
 		printk(KERN_ALERT "mmd_insert failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	if (value1 == value2) {
+	if (result1.dest == result2.dest) {
 		printk(KERN_ALERT "mmd_inserts mapped to same destination");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
+	if (result1.need_copy || result2.need_copy) {
+		printk(KERN_ALERT "clone unexpectedly set");
 		destroy_mmd(&tc);
 		return -1;
 	}
@@ -620,7 +650,7 @@ static int check_data_space_can_be_exhausted(void)
 {
 	int r;
 	struct test_context tc;
-	uint64_t value;
+	struct multisnap_map_result result;
 	unsigned i;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
@@ -629,7 +659,7 @@ static int check_data_space_can_be_exhausted(void)
 
 	/* use up all the available data space */
 	for (i = 0; i < DATA_DEV_SIZE; i++) {
-		r = multisnap_metadata_map(tc.msd[0], i, WRITE, 1, &value);
+		r = multisnap_metadata_map(tc.msd[0], i, WRITE, 1, &result);
 		if (r) {
 			printk(KERN_ALERT "mmd_insert failed");
 			destroy_mmd(&tc);
@@ -638,8 +668,8 @@ static int check_data_space_can_be_exhausted(void)
 	}
 
 	/* next insert should fail */
-	r = multisnap_metadata_map(tc.msd[0], i, WRITE, 1, &value);
-	if (!r) {
+	r = multisnap_metadata_map(tc.msd[0], i, WRITE, 1, &result);
+	if (r != -ENOSPC) {
 		printk(KERN_ALERT "insert unexpectedly succeeded");
 		return -1;
 	}
@@ -651,7 +681,7 @@ static int check_data_space_can_be_exhausted_two_devs(void)
 {
 	int r;
 	struct test_context tc;
-	uint64_t value;
+	struct multisnap_map_result result;
 	unsigned i;
 
 	r = setup_fresh_and_open_thins(&tc, 2);
@@ -660,7 +690,7 @@ static int check_data_space_can_be_exhausted_two_devs(void)
 
 	/* use up all the available data space */
 	for (i = 0; i < DATA_DEV_SIZE; i++) {
-		r = multisnap_metadata_map(tc.msd[i % 2], i, WRITE, 1, &value);
+		r = multisnap_metadata_map(tc.msd[i % 2], i, WRITE, 1, &result);
 		if (r) {
 			printk(KERN_ALERT "mmd_insert failed");
 			destroy_mmd(&tc);
@@ -669,7 +699,7 @@ static int check_data_space_can_be_exhausted_two_devs(void)
 	}
 
 	/* next insert should fail */
-	r = multisnap_metadata_map(tc.msd[i % 2], i, WRITE, 1, &value);
+	r = multisnap_metadata_map(tc.msd[i % 2], i, WRITE, 1, &result);
 	if (!r) {
 		printk(KERN_ALERT "insert unexpectedly succeeded");
 		return -1;
@@ -701,14 +731,14 @@ static int check_fresh_snapshot_has_same_mappings(void)
 	int r, i;
 	unsigned index;
 	struct test_context tc;
-	block_t block1, block2;
+	struct multisnap_map_result result1, result2;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
 		return r;
 
 	for (i = 0; i < 10; i++) {
-		r = multisnap_metadata_map(tc.msd[0], i, WRITE, 1, &block1);
+		r = multisnap_metadata_map(tc.msd[0], i, WRITE, 1, &result1);
 		if (r) {
 			printk(KERN_ALERT "mmd_insert failed");
 			destroy_mmd(&tc);
@@ -730,25 +760,31 @@ static int check_fresh_snapshot_has_same_mappings(void)
 	}
 
 	for (i = 0; i < 10; i++) {
-		r = multisnap_metadata_map(tc.msd[0], i, READ, 1, &block1);
+		r = multisnap_metadata_map(tc.msd[0], i, READ, 1, &result1);
 		if (r) {
 			printk(KERN_ALERT "mmd_lookup1 failed");
 			destroy_mmd(&tc);
 			return r;
 		}
 
-		r = multisnap_metadata_map(tc.msd[index], i, READ, 1, &block2);
+		r = multisnap_metadata_map(tc.msd[index], i, READ, 1, &result2);
 		if (r) {
 			printk(KERN_ALERT "mmd_lookup2 failed");
 			destroy_mmd(&tc);
 			return r;
 		}
 
-		if (block1 != block2) {
+		if (result1.dest != result2.dest) {
 			printk(KERN_ALERT "blocks differ %u != %u",
-			       (unsigned) block1, (unsigned) block2);
+			       (unsigned) result1.dest, (unsigned) result2.dest);
 			destroy_mmd(&tc);
 			return r;
+		}
+
+		if (result1.need_copy || result2.need_copy) {
+			printk(KERN_ALERT "clone unexpectedly set");
+			destroy_mmd(&tc);
+			return -1;
 		}
 	}
 
@@ -767,14 +803,14 @@ static int check_snap_scenario1(void)
 	int r;
 	unsigned index;
 	struct test_context tc;
-	block_t block1, block2;
+	struct multisnap_map_result result1, result2;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
 		return r;
 
 	/* make sure one block is mapped on the origin */
-	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &block1);
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_map failed");
 		destroy_mmd(&tc);
@@ -794,54 +830,79 @@ static int check_snap_scenario1(void)
 		return r;
 	}
 
-	r = multisnap_metadata_map(tc.msd[index], 0, WRITE, 1, &block2);
+	r = multisnap_metadata_map(tc.msd[index], 0, WRITE, 1, &result2);
 	if (r) {
 		printk(KERN_ALERT "mmd_map failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	if (block1 == block2) {
-		printk(KERN_ALERT "blocks unexpectedly match %u", (unsigned) block1);
+	if (result1.dest == result2.dest) {
+		printk(KERN_ALERT "blocks unexpectedly match %u",
+		       (unsigned) result1.dest);
 		destroy_mmd(&tc);
 		return -1;
 	}
 
-	r = multisnap_metadata_map(tc.msd[index], 0, READ, 1, &block1);
+	if (!result2.need_copy || result2.clone != result1.dest) {
+		printk(KERN_ALERT "bad clone value");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index], 0, READ, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_map2 failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	if (block1 != block2) {
+	if (result1.dest != result2.dest) {
 		printk(KERN_ALERT "blocks differ");
 		destroy_mmd(&tc);
 		return -1;
 	}
 
-	r = multisnap_metadata_map(tc.msd[index], 0, WRITE, 1, &block1);
+	if (result1.need_copy) {
+		printk(KERN_ALERT "bad clone value");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index], 0, WRITE, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_map3 failed");
 		destroy_mmd(&tc);
 		return -1;
 	}
 
-	if (block1 != block2) {
+	if (result1.dest != result2.dest) {
 		printk(KERN_ALERT "blocks differ (2)");
 		destroy_mmd(&tc);
 		return -1;
 	}
 
-	r = multisnap_metadata_map(tc.msd[index], 0, READ, 1, &block1);
+	if (result1.need_copy) {
+		printk(KERN_ALERT "bad clone value");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
+	r = multisnap_metadata_map(tc.msd[index], 0, READ, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_map4 failed");
 		destroy_mmd(&tc);
 		return -1;
 	}
 
-	if (block1 != block2) {
+	if (result1.dest != result2.dest) {
 		printk(KERN_ALERT "blocks differ (3)");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
+	if (result1.need_copy) {
+		printk(KERN_ALERT "bad clone value");
 		destroy_mmd(&tc);
 		return -1;
 	}
@@ -862,14 +923,14 @@ static int check_snap_scenario2(void)
 	int r;
 	unsigned index_snap1, index_snap2, index_snap3;
 	struct test_context tc;
-	block_t block1, block2;
+	struct multisnap_map_result result1, result2;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
 		return r;
 
 	/* make sure one block is mapped on the origin */
-	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &block1);
+	r = multisnap_metadata_map(tc.msd[0], 0, WRITE, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_map failed");
 		destroy_mmd(&tc);
@@ -899,11 +960,17 @@ static int check_snap_scenario2(void)
 		return r;
 	}
 
-	r = multisnap_metadata_map(tc.msd[index_snap1], 0, WRITE, 1, &block1);
+	r = multisnap_metadata_map(tc.msd[index_snap1], 0, WRITE, 1, &result1);
 	if (r) {
 		printk(KERN_ALERT "mmd_map failed");
 		destroy_mmd(&tc);
 		return r;
+	}
+
+	if (!result1.need_copy) {
+		printk(KERN_ALERT "bad clone value (3)");
+		destroy_mmd(&tc);
+		return -1;
 	}
 
 	/* 4 */
@@ -921,17 +988,23 @@ static int check_snap_scenario2(void)
 		return r;
 	}
 
-	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &block2);
+	r = multisnap_metadata_map(tc.msd[index_snap2], 0, READ, 1, &result2);
 	if (r) {
 		printk(KERN_ALERT "mmd_map failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	if (block1 == block2) {
-		printk(KERN_ALERT "block match (5)");
+	if (result1.dest == result2.dest) {
+		printk(KERN_ALERT "blocks match (5)");
 		destroy_mmd(&tc);
 		return r;
+	}
+
+	if (result2.need_copy) {
+		printk(KERN_ALERT "bad clone value (5)");
+		destroy_mmd(&tc);
+		return -1;
 	}
 
 	/* 6 */
@@ -941,17 +1014,23 @@ static int check_snap_scenario2(void)
 		return r;
 	}
 
-	r = multisnap_metadata_map(tc.msd[index_snap3], 0, READ, 1, &block2);
+	r = multisnap_metadata_map(tc.msd[index_snap3], 0, READ, 1, &result2);
 	if (r) {
 		printk(KERN_ALERT "mmd_map failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	if (block1 != block2) {
+	if (result1.dest != result2.dest) {
 		printk(KERN_ALERT "block differ (5)");
 		destroy_mmd(&tc);
 		return r;
+	}
+
+	if (result2.need_copy) {
+		printk(KERN_ALERT "bad clone value (6)");
+		destroy_mmd(&tc);
+		return -1;
 	}
 
 	return destroy_mmd(&tc);
@@ -973,7 +1052,7 @@ static int check_snap_scenario3(void)
 	int const snap1_dev = 2, snap2_dev = 3;
 	unsigned index_snap1, index_snap2;
 	struct test_context tc;
-	block_t block, result1, result3, result6;
+	struct multisnap_map_result block, result1, result3, result6;
 
 	r = setup_fresh_and_open_thins(&tc, 2);
 	if (r)
@@ -1032,7 +1111,7 @@ static int check_snap_scenario3(void)
 		return r;
 	}
 
-	if (block != result3) {
+	if (block.dest != result3.dest) {
 		printk(KERN_ALERT "block differ (4)");
 		destroy_mmd(&tc);
 		return r;
@@ -1052,7 +1131,7 @@ static int check_snap_scenario3(void)
 		return r;
 	}
 
-	if (block != result1) {
+	if (block.dest != result1.dest) {
 		printk(KERN_ALERT "block differ (5)");
 		destroy_mmd(&tc);
 		return r;
@@ -1066,6 +1145,12 @@ static int check_snap_scenario3(void)
 		return r;
 	}
 
+	if (!result6.need_copy) {
+		printk(KERN_ALERT "bad clone value");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
 	/* 7 */
 	r = multisnap_metadata_map(tc.msd[index_snap1], 0, READ, 1, &block);
 	if (r) {
@@ -1074,7 +1159,7 @@ static int check_snap_scenario3(void)
 		return r;
 	}
 
-	if (block != result3) {
+	if (block.dest != result3.dest) {
 		printk(KERN_ALERT "blocks differ (7)");
 		destroy_mmd(&tc);
 		return r;
@@ -1088,7 +1173,7 @@ static int check_snap_scenario3(void)
 		return r;
 	}
 
-	if (block != result6) {
+	if (block.dest != result6.dest) {
 		printk(KERN_ALERT "blocks differ (8)");
 		destroy_mmd(&tc);
 		return r;
@@ -1112,7 +1197,7 @@ static int check_snap_scenario4(void)
 	int const snap1_dev = 1, snap2_dev = 2, snap3_dev = 3;
 	unsigned index_snap1, index_snap2, index_snap3;
 	struct test_context tc;
-	block_t block, result2, result4;
+	struct multisnap_map_result block, result2, result4;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
@@ -1148,6 +1233,12 @@ static int check_snap_scenario4(void)
 		return r;
 	}
 
+	if (!result2.need_copy) {
+		printk(KERN_ALERT "bad clone value");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
 	/* 3 */
 	r = multisnap_metadata_create_snap(tc.mmd, snap2_dev, snap1_dev);
 	if (r) {
@@ -1164,10 +1255,16 @@ static int check_snap_scenario4(void)
 		return r;
 	}
 
-	if (result4 != result2) {
+	if (result4.dest != result2.dest) {
 		printk(KERN_ALERT "block differ (4)");
 		destroy_mmd(&tc);
 		return r;
+	}
+
+	if (!result4.need_copy) {
+		printk(KERN_ALERT "bad clone value");
+		destroy_mmd(&tc);
+		return -1;
 	}
 
 	/* 5 */
@@ -1192,7 +1289,7 @@ static int check_snap_scenario4(void)
 		return r;
 	}
 
-	if (block != result2) {
+	if (block.dest != result2.dest) {
 		printk(KERN_ALERT "block differ (6)");
 		destroy_mmd(&tc);
 		return r;
@@ -1212,7 +1309,7 @@ static int check_snap_scenario4(void)
 		return r;
 	}
 
-	if (block != result4) {
+	if (block.dest != result4.dest) {
 		printk(KERN_ALERT "block differ (7)");
 		destroy_mmd(&tc);
 		return r;
@@ -1241,7 +1338,7 @@ static int check_snap_scenario5(void)
 	int const snap1_dev = 1, snap2_dev = 2, snap3_dev = 3;
 	unsigned index_snap2, index_snap3;
 	struct test_context tc;
-	block_t block, result2, result6, result9;
+	struct multisnap_map_result block, result2, result6, result9;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
 	if (r)
@@ -1284,6 +1381,12 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
+	if (!result2.need_copy) {
+		printk(KERN_ALERT "bad clone value");
+		destroy_mmd(&tc);
+		return -1;
+	}
+
 	/* 3 */
 	r = multisnap_metadata_create_snap(tc.mmd, snap3_dev, snap2_dev);
 	if (r) {
@@ -1300,7 +1403,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if (block != result2) {
+	if (block.dest != result2.dest) {
 		printk(KERN_ALERT "block differ (4)");
 		destroy_mmd(&tc);
 		return r;
@@ -1320,7 +1423,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if (block != result2) {
+	if (block.dest != result2.dest) {
 		printk(KERN_ALERT "block differ (5)");
 		destroy_mmd(&tc);
 		return r;
@@ -1334,7 +1437,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if (result6 == result2) {
+	if (result6.dest == result2.dest) {
 		printk(KERN_ALERT "block same (6)");
 		destroy_mmd(&tc);
 		return r;
@@ -1348,7 +1451,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if (block != result6) {
+	if (block.dest != result6.dest) {
 		printk(KERN_ALERT "block differ (7)");
 		destroy_mmd(&tc);
 		return r;
@@ -1362,7 +1465,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if (block != result2) {
+	if (block.dest != result2.dest) {
 		printk(KERN_ALERT "block differ (8)");
 		destroy_mmd(&tc);
 		return r;
@@ -1376,7 +1479,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if ((result9 == result2) || (result9 == result6)) {
+	if ((result9.dest == result2.dest) || (result9.dest == result6.dest)) {
 		printk(KERN_ALERT "block same (9)");
 		destroy_mmd(&tc);
 		return r;
@@ -1390,7 +1493,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if (block != result9) {
+	if (block.dest != result9.dest) {
 		printk(KERN_ALERT "block differ (10)");
 		destroy_mmd(&tc);
 		return r;
@@ -1404,7 +1507,7 @@ static int check_snap_scenario5(void)
 		return r;
 	}
 
-	if (block != result6) {
+	if (block.dest != result6.dest) {
 		printk(KERN_ALERT "block differ (11)");
 		destroy_mmd(&tc);
 		return r;
@@ -1418,7 +1521,7 @@ static int check_devices_persist(void)
 {
 	int r;
 	struct test_context tc;
-	block_t block, result1;
+	struct multisnap_map_result block, result1;
 	unsigned index;
 
 	r = setup_fresh_and_open_thins(&tc, 1);
@@ -1466,7 +1569,7 @@ static int check_devices_persist(void)
 		return r;
 	}
 
-	if (block != result1) {
+	if (block.dest != result1.dest) {
 		printk(KERN_ALERT "blocks differ");
 		destroy_mmd(&tc);
 		return r;
