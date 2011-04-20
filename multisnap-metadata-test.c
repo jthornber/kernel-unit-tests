@@ -20,6 +20,63 @@
 
 /*----------------------------------------------------------------*/
 
+struct multisnap_map_result {
+	block_t origin;
+	block_t dest;
+	int need_copy;
+};
+
+static int multisnap_metadata_map(struct ms_device *msd,
+				   block_t block,
+				   int io_direction,
+				   int can_block,
+				   struct multisnap_map_result *result)
+{
+	int r;
+	struct multisnap_lookup_result lookup_result;
+
+	r = multisnap_metadata_lookup(msd, block, can_block, &lookup_result);
+
+	if (r) {
+		if (r == -ENODATA && io_direction == WRITE) {
+			r = multisnap_metadata_alloc_data_block(msd, &result->dest);
+			if (r)
+				return r;
+
+			r = multisnap_metadata_insert(msd, block, result->dest);
+			if (r) {
+				multisnap_metadata_free_data_block(msd, result->dest);
+				return r;
+			}
+
+			result->origin = result->dest;
+			result->need_copy = 0;
+		} else
+			return r;
+	} else {
+		result->origin = lookup_result.block;
+		if (io_direction == WRITE && lookup_result.shared) {
+
+			r = multisnap_metadata_alloc_data_block(msd, &result->dest);
+			if (r)
+				return r;
+
+			r = multisnap_metadata_insert(msd, block, result->dest);
+			if (r) {
+				multisnap_metadata_free_data_block(msd, result->dest);
+				return r;
+			}
+
+			result->need_copy = 1;
+		} else {
+			result->dest = lookup_result.block;
+			result->need_copy = 0;
+		}
+	}
+
+	return 0;
+}
+
 static int with_block(const char *path, block_t blk,
 		      void (*fn)(void *, void *),
 		      void *context)
@@ -844,7 +901,7 @@ static int check_snap_scenario1(void)
 		return -1;
 	}
 
-	if (!result2.need_copy || result2.clone != result1.dest) {
+	if (!result2.need_copy || result2.origin != result1.dest) {
 		printk(KERN_ALERT "bad clone value");
 		destroy_mmd(&tc);
 		return -1;
@@ -1578,26 +1635,6 @@ static int check_devices_persist(void)
 	return destroy_mmd(&tc);
 }
 
-static int check_get_workqueue(void)
-{
-	int r;
-	struct test_context tc;
-	struct workqueue_struct *wq;
-
-	r = setup_fresh_and_open_thins(&tc, 1);
-	if (r)
-		return r;
-
-	wq = multisnap_metadata_get_workqueue(tc.msd[0]);
-	if (!wq) {
-		printk(KERN_ALERT "get workqueue failed");
-		destroy_mmd(&tc);
-		return -1;
-	}
-
-	return destroy_mmd(&tc);
-}
-
 /*----------------------------------------------------------------*/
 
 typedef int (*test_fn)(void);
@@ -1624,7 +1661,7 @@ static int multisnap_metadata_test_init(void)
 		{"reopen metadata device",	     check_reopen_mmd},
 		{"reopen a bad superblock",	     check_reopen_bad_fails},
 		// {"reopen a slightly bad superblock", check_reopen_slightly_bad_fails},
-		
+
 		/* creation of virtual devices within the mmd */
 		{"open non existent virtual device fails",	check_open_bad_msd},
 		{"create a thin virtual device succeeds",	check_create_thin_msd},
@@ -1656,8 +1693,6 @@ static int multisnap_metadata_test_init(void)
 		{"snapshot scenario 5",                           check_snap_scenario5},
 
 		{"devices persist",    check_devices_persist},
-
-		{"get workqueue", check_get_workqueue},
 	};
 
 	int i, r;
