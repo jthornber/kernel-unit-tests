@@ -3,9 +3,9 @@
 #include <linux/kernel.h>
 #include <linux/blkdev.h>
 
-#include "md/persistent-data/btree.h"
-#include "md/persistent-data/transaction-manager.h"
-#include "md/persistent-data/space-map-core.h"
+#include "md/persistent-data/dm-btree.h"
+#include "md/persistent-data/dm-transaction-manager.h"
+#include "md/persistent-data/dm-space-map-core.h"
 
 /*----------------------------------------------------------------*/
 
@@ -13,7 +13,7 @@
 #define BM_BLOCK_SIZE 4096
 #define CACHE_SIZE 16		/* small enough that there will be a lot of contention */
 
-typedef int (*test_fn)(struct transaction_manager *);
+typedef int (*test_fn)(struct dm_transaction_manager *);
 
 /*----------------------------------------------------------------*/
 
@@ -21,30 +21,30 @@ typedef int (*test_fn)(struct transaction_manager *);
  * For these tests we're not interested in the space map root, so we roll
  * tm_pre_commit() and tm_commit() into one function.
  */
-static int begin(struct transaction_manager *tm, struct block **superblock)
+static int begin(struct dm_transaction_manager *tm, struct dm_block **superblock)
 {
 	int r;
 
-	r = tm_new_block(tm, superblock);
+	r = dm_tm_new_block(tm, superblock);
 	if (r < 0)
 		return r;
 
-	return tm_begin(tm);
+	return dm_tm_begin(tm);
 }
 
-static int begin_again(struct transaction_manager *tm, block_t sb, struct block **superblock)
+static int begin_again(struct dm_transaction_manager *tm, dm_block_t sb, struct dm_block **superblock)
 {
-	int r = bm_write_lock(tm_get_bm(tm), sb, superblock);
+	int r = dm_bm_write_lock(dm_tm_get_bm(tm), sb, superblock);
 	if (r < 0)
 		return r;
 
-	return tm_begin(tm);
+	return dm_tm_begin(tm);
 }
 
-static void commit(struct transaction_manager *tm, struct block *superblock)
+static void commit(struct dm_transaction_manager *tm, struct dm_block *superblock)
 {
-	tm_pre_commit(tm);
-	tm_commit(tm, superblock);
+	dm_tm_pre_commit(tm);
+	dm_tm_commit(tm, superblock);
 }
 
 static uint64_t next_rand(uint64_t last)
@@ -56,15 +56,15 @@ static uint64_t next_rand(uint64_t last)
 }
 
 #define INSERT_COUNT 5000
-static int check_insert_commit_every(struct transaction_manager *tm,
+static int check_insert_commit_every(struct dm_transaction_manager *tm,
 				     unsigned commit_interval)
 {
 	int r, i, committed = 1;
 	uint64_t key = 0;
 	uint64_t value = 0;
-	block_t root = 0;
-	struct btree_info info;
-	struct block *superblock;
+	dm_block_t root = 0;
+	struct dm_btree_info info;
+	struct dm_block *superblock;
 
 	info.tm = tm;
 	info.levels = 1;
@@ -79,9 +79,9 @@ static int check_insert_commit_every(struct transaction_manager *tm,
 		return r;
 	}
 
-	r = btree_empty(&info, &root);
+	r = dm_btree_empty(&info, &root);
 	if (r < 0) {
-		printk(KERN_ALERT "btree_empty failed");
+		printk(KERN_ALERT "dm_btree_empty failed");
 		return r;
 	}
 
@@ -90,14 +90,14 @@ static int check_insert_commit_every(struct transaction_manager *tm,
 		committed = 0;
 		key = next_rand(value);
 		value = next_rand(key);
-		r = btree_insert(&info, root, &key, &value, &root);
+		r = dm_btree_insert(&info, root, &key, &value, &root);
 		if (r < 0) {
-			printk(KERN_ALERT "insert failed");
+			printk(KERN_ALERT "dm_btree_insert failed");
 			return r;
 		}
 
 		if ((i + 1 % commit_interval) == 0) {
-			block_t b = block_location(superblock);
+			dm_block_t b = dm_block_location(superblock);
 			commit(tm, superblock);
 			r = begin_again(tm, b, &superblock);
 			if (r < 0)
@@ -116,7 +116,7 @@ static int check_insert_commit_every(struct transaction_manager *tm,
 		key = next_rand(value);
 		value = next_rand(key);
 
-		r = btree_lookup_equal(&info, root, &key, &value2);
+		r = dm_btree_lookup_equal(&info, root, &key, &value2);
 		if (r < 0)
 			return r;
 
@@ -129,24 +129,24 @@ static int check_insert_commit_every(struct transaction_manager *tm,
 	return 0;
 }
 
-static int check_insert(struct transaction_manager *tm)
+static int check_insert(struct dm_transaction_manager *tm)
 {
 	return check_insert_commit_every(tm, 100000);
 }
 
-static int check_multiple_commits(struct transaction_manager *tm)
+static int check_multiple_commits(struct dm_transaction_manager *tm)
 {
 	return check_insert_commit_every(tm, 100);
 }
 
-static int check_lookup_empty(struct transaction_manager *tm)
+static int check_lookup_empty(struct dm_transaction_manager *tm)
 {
 	int r;
 	uint64_t key = 100;
 	__le64 value;
-	block_t root = 0;
-	struct btree_info info;
-	struct block *superblock;
+	dm_block_t root = 0;
+	struct dm_btree_info info;
+	struct dm_block *superblock;
 
 	info.tm = tm;
 	info.levels = 1;
@@ -161,13 +161,13 @@ static int check_lookup_empty(struct transaction_manager *tm)
 		return r;
 	}
 
-	r = btree_empty(&info, &root);
+	r = dm_btree_empty(&info, &root);
 	if (r < 0) {
 		printk(KERN_ALERT "btree_empty failed");
 		return r;
 	}
 
-	r = btree_lookup_equal(&info, root, &key, &value);
+	r = dm_btree_lookup_equal(&info, root, &key, &value);
 	if (r == 0) {
 		printk(KERN_ALERT "value unexpectedly found");
 		return -1;
@@ -180,7 +180,7 @@ static int check_lookup_empty(struct transaction_manager *tm)
 	return 0;
 }
 
-static int check_insert_h(struct transaction_manager *tm)
+static int check_insert_h(struct dm_transaction_manager *tm)
 {
 	typedef uint64_t table_entry[5];
 	static table_entry table[] = {
@@ -202,10 +202,10 @@ static int check_insert_h(struct transaction_manager *tm)
 	};
 
 	uint64_t value;
-	block_t root = 0, sb;
+	dm_block_t root = 0, sb;
 	int i, r;
-	struct btree_info info;
-	struct block *superblock;
+	struct dm_btree_info info;
+	struct dm_block *superblock;
 
 	info.tm = tm;
 	info.levels = 4;
@@ -217,16 +217,16 @@ static int check_insert_h(struct transaction_manager *tm)
 	r = begin(tm, &superblock);
 	if (r < 0)
 		return r;
-	sb = block_location(superblock);
+	sb = dm_block_location(superblock);
 
-	r = btree_empty(&info, &root);
+	r = dm_btree_empty(&info, &root);
 	if (r < 0) {
 		printk(KERN_ALERT "btree_empty() failed");
 		return r;
 	}
 
 	for (i = 0; i < sizeof(table) / sizeof(*table); i++) {
-		r = btree_insert(&info, root, table[i], &table[i][4], &root);
+		r = dm_btree_insert(&info, root, table[i], &table[i][4], &root);
 		if (r < 0) {
 			printk(KERN_ALERT "btree_insert failed");
 			return r;
@@ -235,7 +235,7 @@ static int check_insert_h(struct transaction_manager *tm)
 	commit(tm, superblock);
 
 	for (i = 0; i < sizeof(table) / sizeof(*table); i++) {
-		r = btree_lookup_equal(&info, root, table[i], &value);
+		r = dm_btree_lookup_equal(&info, root, table[i], &value);
 		if (r < 0) {
 			printk(KERN_ALERT "btree_lookup_equal failed");
 			return r;
@@ -255,7 +255,7 @@ static int check_insert_h(struct transaction_manager *tm)
 		if (r < 0)
 			return r;
 
-		r = btree_insert(&info, root, keys, &v, &root);
+		r = dm_btree_insert(&info, root, keys, &v, &root);
 		if (r < 0) {
 			printk(KERN_ALERT "btree_insert failed");
 			return r;
@@ -263,7 +263,7 @@ static int check_insert_h(struct transaction_manager *tm)
 
 		commit(tm, superblock);
 
-		r = btree_lookup_equal(&info, root, keys, &value);
+		r = dm_btree_lookup_equal(&info, root, keys, &value);
 		if (r < 0) {
 			printk(KERN_ALERT "btree_lookup_equal failed");
 			return r;
@@ -278,7 +278,7 @@ static int check_insert_h(struct transaction_manager *tm)
 	/* check overwrites */
 	begin_again(tm, sb, &superblock);
 	for (i = 0; i < sizeof(overwrites) / sizeof(*overwrites); i++) {
-		r = btree_insert(&info, root, overwrites[i], &overwrites[i][4], &root);
+		r = dm_btree_insert(&info, root, overwrites[i], &overwrites[i][4], &root);
 		if (r < 0) {
 			printk(KERN_ALERT "btree_insert failed");
 			return r;
@@ -287,7 +287,7 @@ static int check_insert_h(struct transaction_manager *tm)
 	commit(tm, superblock);
 
 	for (i = 0; i < sizeof(overwrites) / sizeof(*overwrites); i++) {
-		r = btree_lookup_equal(&info, root, overwrites[i], &value);
+		r = dm_btree_lookup_equal(&info, root, overwrites[i], &value);
 		if (r < 0) {
 			printk(KERN_ALERT "btree_lookup_equal failed");
 			return r;
@@ -302,7 +302,7 @@ static int check_insert_h(struct transaction_manager *tm)
 }
 
 #define MAX_LEVELS 4
-static int do_remove_scenario(struct btree_info *info, block_t root)
+static int do_remove_scenario(struct dm_btree_info *info, dm_block_t root)
 {
 	int i, r;
 	uint64_t key[MAX_LEVELS], bad_key[MAX_LEVELS];
@@ -320,37 +320,37 @@ static int do_remove_scenario(struct btree_info *info, block_t root)
 	key[i] = 100;
 	bad_key[i] = 101;
 
-	r = btree_insert(info, root, key, &value, &root);
+	r = dm_btree_insert(info, root, key, &value, &root);
 	if (r) {
 		printk(KERN_ALERT "insert failed");
 		return -1;
 	}
 
-	r = btree_remove(info, root, bad_key, &root);
+	r = dm_btree_remove(info, root, bad_key, &root);
 	if (r != -ENODATA) {
 		printk(KERN_ALERT "remove1 didn't return -ENODATA");
 		return -1;
 	}
 
-	r = btree_remove(info, root, key, &root);
+	r = dm_btree_remove(info, root, key, &root);
 	if (r) {
 		printk(KERN_ALERT "remove failed");
 		return r;
 	}
 
-	r = btree_remove(info, root, bad_key, &root);
+	r = dm_btree_remove(info, root, bad_key, &root);
 	if (r != -ENODATA) {
 		printk(KERN_ALERT "remove2 didn't return -ENODATA");
 		return -1;
 	}
 
-	r = btree_remove(info, root, key, &root);
+	r = dm_btree_remove(info, root, key, &root);
 	if (r != -ENODATA) {
 		printk(KERN_ALERT "remove3 didn't return -ENODATA");
 		return -1;
 	}
 
-	r = btree_lookup_equal(info, root, key, &value);
+	r = dm_btree_lookup_equal(info, root, key, &value);
 	if (r == 0) {
 		printk(KERN_ALERT "value unexpectedly found");
 		return -1;
@@ -359,12 +359,12 @@ static int do_remove_scenario(struct btree_info *info, block_t root)
 	return 0;
 }
 
-static int check_remove_one(struct transaction_manager *tm)
+static int check_remove_one(struct dm_transaction_manager *tm)
 {
 	int r;
-	block_t root = 0;
-	struct btree_info info;
-	struct block *superblock;
+	dm_block_t root = 0;
+	struct dm_btree_info info;
+	struct dm_block *superblock;
 
 	info.tm = tm;
 	info.levels = 1;
@@ -379,7 +379,7 @@ static int check_remove_one(struct transaction_manager *tm)
 		return r;
 	}
 
-	r = btree_empty(&info, &root);
+	r = dm_btree_empty(&info, &root);
 	if (r < 0) {
 		printk(KERN_ALERT "btree_empty failed");
 		return r;
@@ -388,13 +388,13 @@ static int check_remove_one(struct transaction_manager *tm)
 	return do_remove_scenario(&info, root);
 }
 
-static int check_removal_with_internal_nodes(struct transaction_manager *tm)
+static int check_removal_with_internal_nodes(struct dm_transaction_manager *tm)
 {
 	int r;
 	__le64 value = 0;
-	block_t root = 0;
-	struct btree_info info;
-	struct block *superblock;
+	dm_block_t root = 0;
+	struct dm_btree_info info;
+	struct dm_block *superblock;
 
 	info.tm = tm;
 	info.levels = 1;
@@ -409,7 +409,7 @@ static int check_removal_with_internal_nodes(struct transaction_manager *tm)
 		return r;
 	}
 
-	r = btree_empty(&info, &root);
+	r = dm_btree_empty(&info, &root);
 	if (r < 0) {
 		printk(KERN_ALERT "btree_empty failed");
 		return r;
@@ -420,7 +420,7 @@ static int check_removal_with_internal_nodes(struct transaction_manager *tm)
 		unsigned c;
 		for (c = 0; c < 1000; c++) {
 			uint64_t k = c + 10000;
-			r = btree_insert(&info, root, &k, &value, &root);
+			r = dm_btree_insert(&info, root, &k, &value, &root);
 			if (r) {
 				printk(KERN_ALERT "insert(%u) failed", c);
 				return r;
@@ -431,14 +431,14 @@ static int check_removal_with_internal_nodes(struct transaction_manager *tm)
 	return do_remove_scenario(&info, root);
 }
 
-static int check_removal_in_hierarchy(struct transaction_manager *tm)
+static int check_removal_in_hierarchy(struct dm_transaction_manager *tm)
 {
 	int r;
 	uint64_t key[3];
 	__le64 value = 0;
-	block_t root = 0;
-	struct btree_info info;
-	struct block *superblock;
+	dm_block_t root = 0;
+	struct dm_btree_info info;
+	struct dm_block *superblock;
 
 	info.tm = tm;
 	info.levels = 3;
@@ -453,7 +453,7 @@ static int check_removal_in_hierarchy(struct transaction_manager *tm)
 		return r;
 	}
 
-	r = btree_empty(&info, &root);
+	r = dm_btree_empty(&info, &root);
 	if (r < 0) {
 		printk(KERN_ALERT "btree_empty failed");
 		return r;
@@ -466,7 +466,7 @@ static int check_removal_in_hierarchy(struct transaction_manager *tm)
 		key[1] = 1;
 		for (c = 0; c < 1000; c++) {
 			key[2] = c + 10000;
-			r = btree_insert(&info, root, key, &value, &root);
+			r = dm_btree_insert(&info, root, key, &value, &root);
 			if (r) {
 				printk(KERN_ALERT "insert(%u) failed", c);
 			}
@@ -477,16 +477,16 @@ static int check_removal_in_hierarchy(struct transaction_manager *tm)
 }
 
 static int insert_remove_many_scenario(
-	struct transaction_manager *tm,
+	struct dm_transaction_manager *tm,
 	unsigned *order,
 	unsigned count)
 {
 	int r;
 	unsigned c, check;
 	__le64 value = 0;
-	block_t root = 0;
-	struct btree_info info;
-	struct block *superblock;
+	dm_block_t root = 0;
+	struct dm_btree_info info;
+	struct dm_block *superblock;
 
 	info.tm = tm;
 	info.levels = 1;
@@ -501,7 +501,7 @@ static int insert_remove_many_scenario(
 		return r;
 	}
 
-	r = btree_empty(&info, &root);
+	r = dm_btree_empty(&info, &root);
 	if (r < 0) {
 		printk(KERN_ALERT "btree_empty failed");
 		return r;
@@ -509,7 +509,7 @@ static int insert_remove_many_scenario(
 
 	for (c = 0; c < count; c++) {
 		uint64_t k = order[c];
-		r = btree_insert(&info, root, &k, &value, &root);
+		r = dm_btree_insert(&info, root, &k, &value, &root);
 		if (r) {
 			printk(KERN_ALERT "insert(%u) failed", c);
 			return r;
@@ -519,7 +519,7 @@ static int insert_remove_many_scenario(
 	for (check = c + 1; check < count; check++) {
 		uint64_t k = order[check];
 		void *value;
-		r = btree_lookup_equal(&info, root, &k, &value);
+		r = dm_btree_lookup_equal(&info, root, &k, &value);
 		if (r) {
 			printk(KERN_ALERT "missing %d", order[check]);
 			return r;
@@ -529,7 +529,7 @@ static int insert_remove_many_scenario(
 	for (c = 0; c < count; c++) {
 		uint64_t k = order[c];
 		__le64 value;
-		r = btree_remove(&info, root, &k, &root);
+		r = dm_btree_remove(&info, root, &k, &root);
 		if (r) {
 			printk(KERN_ALERT "remove(%u) failed (r = %d)", order[c], r);
 			return r;
@@ -537,14 +537,14 @@ static int insert_remove_many_scenario(
 
 		for (check = c + 1; check < count; check++) {
 			uint64_t k = order[check];
-			r = btree_lookup_equal(&info, root, &k, &value);
+			r = dm_btree_lookup_equal(&info, root, &k, &value);
 			if (r) {
 				printk(KERN_ALERT "remove(%u) also removed %d", order[c], order[check]);
 				return r;
 			}
 		}
 
-		r = btree_lookup_equal(&info, root, &k, &value);
+		r = dm_btree_lookup_equal(&info, root, &k, &value);
 		if (!r) {
 			printk(KERN_ALERT "remove didn't work for %d", order[c]);
 			return -1;
@@ -555,7 +555,7 @@ static int insert_remove_many_scenario(
 }
 
 #define COUNT 1000
-static int check_insert_remove_many(struct transaction_manager *tm)
+static int check_insert_remove_many(struct dm_transaction_manager *tm)
 {
 	static unsigned order[COUNT];
 
@@ -567,7 +567,7 @@ static int check_insert_remove_many(struct transaction_manager *tm)
 	return insert_remove_many_scenario(tm, order, COUNT);
 }
 
-static int check_insert_remove_many_reverse(struct transaction_manager *tm)
+static int check_insert_remove_many_reverse(struct dm_transaction_manager *tm)
 {
 	static unsigned order[COUNT];
 
@@ -602,7 +602,7 @@ static void shuffle(unsigned *array, unsigned count)
 	}
 }
 
-static int check_insert_remove_many_random(struct transaction_manager *tm)
+static int check_insert_remove_many_random(struct dm_transaction_manager *tm)
 {
 	static unsigned order[COUNT];
 
@@ -615,7 +615,7 @@ static int check_insert_remove_many_random(struct transaction_manager *tm)
 	return insert_remove_many_scenario(tm, order, COUNT);
 }
 
-static int check_insert_remove_many_center(struct transaction_manager *tm)
+static int check_insert_remove_many_center(struct dm_transaction_manager *tm)
 {
 	static unsigned order[COUNT];
 
@@ -640,20 +640,20 @@ static int check_insert_remove_many_center(struct transaction_manager *tm)
 static int run_test(const char *name, test_fn fn)
 {
 	int r;
-	struct space_map *sm = sm_core_create(NR_BLOCKS);
+	struct dm_space_map *sm = dm_sm_core_create(NR_BLOCKS);
 	int mode = FMODE_READ | FMODE_WRITE | FMODE_EXCL;
 	struct block_device *bdev = blkdev_get_by_path("/dev/sdb", mode, &run_test);
-	struct block_manager *bm;
-	struct transaction_manager *tm;
+	struct dm_block_manager *bm;
+	struct dm_transaction_manager *tm;
 
 	if (IS_ERR(bdev))
 		return -1;
 
-	bm = block_manager_create(bdev, BM_BLOCK_SIZE, CACHE_SIZE);
+	bm = dm_block_manager_create(bdev, BM_BLOCK_SIZE, CACHE_SIZE);
 	if (!bm)
 		return -1;
 
-	tm = tm_create(bm, sm);
+	tm = dm_tm_create(bm, sm);
 	if (!tm)
 		return -1;
 
@@ -661,10 +661,10 @@ static int run_test(const char *name, test_fn fn)
 	r = fn(tm);
 	printk(r == 0 ? KERN_ALERT "pass\n" : KERN_ALERT "fail\n");
 
-	tm_destroy(tm);
-	block_manager_destroy(bm);
+	dm_tm_destroy(tm);
+	dm_block_manager_destroy(bm);
 	blkdev_put(bdev, mode);
-	sm_destroy(sm);
+	dm_sm_destroy(sm);
 	return 0;
 }
 

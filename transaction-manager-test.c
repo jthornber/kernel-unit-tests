@@ -3,8 +3,8 @@
 #include <linux/kernel.h>
 #include <linux/blkdev.h>
 
-#include "md/persistent-data/transaction-manager.h"
-#include "md/persistent-data/space-map-core.h"
+#include "md/persistent-data/dm-transaction-manager.h"
+#include "md/persistent-data/dm-space-map-core.h"
 
 /*----------------------------------------------------------------*/
 
@@ -12,43 +12,43 @@
 #define BM_BLOCK_SIZE 4096
 #define CACHE_SIZE 16
 
-typedef int (*test_fn)(struct transaction_manager *);
+typedef int (*test_fn)(struct dm_transaction_manager *);
 
 /*----------------------------------------------------------------*/
 
-static int check_commit(struct transaction_manager *tm)
+static int check_commit(struct dm_transaction_manager *tm)
 {
 	int r, i;
-	block_t sb;
-	struct block *superblock;
+	dm_block_t sb;
+	struct dm_block *superblock;
 
-	r = tm_begin(tm);
+	r = dm_tm_begin(tm);
 	if (r < 0)
 		return r;
 
-	r = tm_new_block(tm, &superblock);
+	r = dm_tm_new_block(tm, &superblock);
 	if (r < 0)
 		return r;
 
 	for (i = 0; i < 10; i++) {
-		struct block *b;
-		r = tm_new_block(tm, &b);
+		struct dm_block *b;
+		r = dm_tm_new_block(tm, &b);
 		if (r < 0)
 			return r;
 	}
 
-	r = tm_pre_commit(tm);
+	r = dm_tm_pre_commit(tm);
 	if (r < 0)
 		return r;
 
-	sb = block_location(superblock);
+	sb = dm_block_location(superblock);
 
-	r = tm_commit(tm, superblock);
+	r = dm_tm_commit(tm, superblock);
 	if (r < 0)
 		return r;
 
 	/* check the lock on superblock was dropped */
-	r = tm_read_lock(tm, sb, &superblock);
+	r = dm_tm_read_lock(tm, sb, &superblock);
 	if (r < 0)
 		return r;
 
@@ -60,20 +60,20 @@ static int check_commit(struct transaction_manager *tm)
 static int run_test(const char *name, test_fn fn)
 {
 	int r;
-	struct space_map *sm = sm_core_create(NR_BLOCKS);
+	struct dm_space_map *sm = dm_sm_core_create(NR_BLOCKS);
 	int mode = FMODE_READ | FMODE_WRITE | FMODE_EXCL;
 	struct block_device *bdev = blkdev_get_by_path("/dev/sdb", mode, &run_test);
-	struct block_manager *bm;
-	struct transaction_manager *tm;
+	struct dm_block_manager *bm;
+	struct dm_transaction_manager *tm;
 
 	if (IS_ERR(bdev))
 		return -1;
 
-	bm = block_manager_create(bdev, BM_BLOCK_SIZE, CACHE_SIZE);
+	bm = dm_block_manager_create(bdev, BM_BLOCK_SIZE, CACHE_SIZE);
 	if (!bm)
 		return -1;
 
-	tm = tm_create(bm, sm);
+	tm = dm_tm_create(bm, sm);
 	if (!tm)
 		return -1;
 
@@ -81,10 +81,10 @@ static int run_test(const char *name, test_fn fn)
 	r = fn(tm);
 	printk(r == 0 ? KERN_ALERT "pass\n" : KERN_ALERT "fail\n");
 
-	tm_destroy(tm);
-	block_manager_destroy(bm);
+	dm_tm_destroy(tm);
+	dm_block_manager_destroy(bm);
 	blkdev_put(bdev, mode);
-	sm_destroy(sm);
+	dm_sm_destroy(sm);
 	return 0;
 }
 

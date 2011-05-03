@@ -4,8 +4,8 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
-#include "md/persistent-data/block-manager.h"
-#include "md/multisnap-metadata.h"
+#include "md/persistent-data/dm-block-manager.h"
+#include "md/dm-multisnap-metadata.h"
 
 /*----------------------------------------------------------------*/
 
@@ -21,31 +21,31 @@
 /*----------------------------------------------------------------*/
 
 struct multisnap_map_result {
-	block_t origin;
-	block_t dest;
+	dm_block_t origin;
+	dm_block_t dest;
 	int need_copy;
 };
 
-static int multisnap_metadata_map(struct ms_device *msd,
-				   block_t block,
+static int multisnap_metadata_map(struct dm_ms_device *msd,
+				   dm_block_t block,
 				   int io_direction,
 				   int can_block,
 				   struct multisnap_map_result *result)
 {
 	int r;
-	struct multisnap_lookup_result lookup_result;
+	struct dm_multisnap_lookup_result lookup_result;
 
-	r = multisnap_metadata_lookup(msd, block, can_block, &lookup_result);
+	r = dm_multisnap_metadata_lookup(msd, block, can_block, &lookup_result);
 
 	if (r) {
 		if (r == -ENODATA && io_direction == WRITE) {
-			r = multisnap_metadata_alloc_data_block(msd, &result->dest);
+			r = dm_multisnap_metadata_alloc_data_block(msd, &result->dest);
 			if (r)
 				return r;
 
-			r = multisnap_metadata_insert(msd, block, result->dest);
+			r = dm_multisnap_metadata_insert(msd, block, result->dest);
 			if (r) {
-				multisnap_metadata_free_data_block(msd, result->dest);
+				dm_multisnap_metadata_free_data_block(msd, result->dest);
 				return r;
 			}
 
@@ -57,13 +57,13 @@ static int multisnap_metadata_map(struct ms_device *msd,
 		result->origin = lookup_result.block;
 		if (io_direction == WRITE && lookup_result.shared) {
 
-			r = multisnap_metadata_alloc_data_block(msd, &result->dest);
+			r = dm_multisnap_metadata_alloc_data_block(msd, &result->dest);
 			if (r)
 				return r;
 
-			r = multisnap_metadata_insert(msd, block, result->dest);
+			r = dm_multisnap_metadata_insert(msd, block, result->dest);
 			if (r) {
-				multisnap_metadata_free_data_block(msd, result->dest);
+				dm_multisnap_metadata_free_data_block(msd, result->dest);
 				return r;
 			}
 
@@ -77,14 +77,14 @@ static int multisnap_metadata_map(struct ms_device *msd,
 	return 0;
 }
 
-static int with_block(const char *path, block_t blk,
+static int with_block(const char *path, dm_block_t blk,
 		      void (*fn)(void *, void *),
 		      void *context)
 {
 	int r;
-	struct block_manager *bm;
+	struct dm_block_manager *bm;
 	struct block_device *bdev;
-	struct block *b;
+	struct dm_block *b;
 	int mode = FMODE_READ | FMODE_WRITE | FMODE_EXCL;
 	bdev = blkdev_get_by_path(path, mode, &with_block);
 	if (IS_ERR(bdev)) {
@@ -92,23 +92,23 @@ static int with_block(const char *path, block_t blk,
 		return -1;
 	}
 
-	bm = block_manager_create(bdev, METADATA_BLOCK_SIZE, 1);
+	bm = dm_block_manager_create(bdev, METADATA_BLOCK_SIZE, 1);
 	if (!bm) {
 		printk(KERN_ALERT "%s: couldn't create bm", __func__);
 		return -1;
 	}
 
-	r = bm_write_lock(bm, blk, &b);
+	r = dm_bm_write_lock(bm, blk, &b);
 	if (r)
 		printk(KERN_ALERT "%s: couldn't lock block",
 		       __func__);
 	else {
-		fn(context, block_data(b));
-		bm_unlock(b);
-		r = bm_flush(bm, 1);
+		fn(context, dm_block_data(b));
+		dm_bm_unlock(b);
+		r = dm_bm_flush(bm, 1);
 	}
 
-	block_manager_destroy(bm);
+	dm_block_manager_destroy(bm);
 	blkdev_put(bdev, mode);
 	return r;
 }
@@ -121,7 +121,7 @@ static void memset_(void *context, void *data)
 	memset(data, *v, METADATA_BLOCK_SIZE);
 }
 
-static int memset_block(const char *path, block_t blk, unsigned char v)
+static int memset_block(const char *path, dm_block_t blk, unsigned char v)
 {
 	return with_block(path, blk, memset_, &v);
 }
@@ -143,7 +143,7 @@ static void set_byte_(void *context, void *data)
 	as_chars[sbc->offset] = sbc->v;
 }
 
-static int set_block_byte(const char *path, block_t blk, size_t offset, unsigned char v)
+static int set_block_byte(const char *path, dm_block_t blk, size_t offset, unsigned char v)
 {
 	struct sb_context sbc;
 	sbc.offset = offset;
@@ -156,10 +156,10 @@ static int set_block_byte(const char *path, block_t blk, size_t offset, unsigned
 #define MAX_MSD 32
 struct test_context {
 	struct block_device *bdev;
-	struct multisnap_metadata *mmd;
+	struct dm_multisnap_metadata *mmd;
 
 	unsigned nr_msd;
-	struct ms_device *msd[MAX_MSD];
+	struct dm_ms_device *msd[MAX_MSD];
 };
 
 static int create_mmd(struct test_context *tc)
@@ -172,7 +172,7 @@ static int create_mmd(struct test_context *tc)
 	if (IS_ERR(tc->bdev))
 		return -1;
 
-	tc->mmd = multisnap_metadata_open(tc->bdev,
+	tc->mmd = dm_multisnap_metadata_open(tc->bdev,
 					  DATA_BLOCK_SIZE,
 					  DATA_DEV_SIZE);
 	if (!tc->mmd) {
@@ -192,7 +192,7 @@ static int destroy_mmd(struct test_context *tc)
 
 	for (i = 0; i < tc->nr_msd; i++) {
 		if (tc->msd[i]) {
-			r = multisnap_metadata_close_device(tc->msd[i]);
+			r = dm_multisnap_metadata_close_device(tc->msd[i]);
 			if (r) {
 				printk(KERN_ALERT "mmd_close_device failed");
 				return r;
@@ -200,7 +200,7 @@ static int destroy_mmd(struct test_context *tc)
 		}
 	}
 
-	r = multisnap_metadata_close(tc->mmd);
+	r = dm_multisnap_metadata_close(tc->mmd);
 	if (r)
 		return r;
 
@@ -222,7 +222,7 @@ static int setup_fresh_mmd(struct test_context *tc)
 }
 
 static int setup_fresh_mmd_and_thin(struct test_context *tc,
-				    multisnap_dev_t id)
+				    dm_multisnap_dev_t id)
 {
 	int r;
 
@@ -230,7 +230,7 @@ static int setup_fresh_mmd_and_thin(struct test_context *tc,
 	if (r)
 		return r;
 
-	r = multisnap_metadata_create_thin(tc->mmd, id, 0);
+	r = dm_multisnap_metadata_create_thin(tc->mmd, id, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_thin failed");
 		destroy_mmd(tc);
@@ -249,13 +249,13 @@ static int setup_fresh_and_open_thins(struct test_context *tc, unsigned count)
 		return r;
 
 	for (i = 0; i < count; i++) {
-		r = multisnap_metadata_create_thin(tc->mmd, i, 0);
+		r = dm_multisnap_metadata_create_thin(tc->mmd, i, 0);
 		if (r) {
 			printk(KERN_ALERT "mmd_create_thin failed");
 			destroy_mmd(tc);
 		}
 
-		r = multisnap_metadata_open_device(tc->mmd, i, tc->msd + i);
+		r = dm_multisnap_metadata_open_device(tc->mmd, i, tc->msd + i);
 		if (r) {
 			printk(KERN_ALERT "mmd open_device failed");
 			destroy_mmd(tc);
@@ -268,9 +268,9 @@ static int setup_fresh_and_open_thins(struct test_context *tc, unsigned count)
 	return 0;
 }
 
-static int open_dev(struct test_context *tc, multisnap_dev_t dev, unsigned *index)
+static int open_dev(struct test_context *tc, dm_multisnap_dev_t dev, unsigned *index)
 {
-	int r = multisnap_metadata_open_device(tc->mmd, dev, tc->msd + tc->nr_msd);
+	int r = dm_multisnap_metadata_open_device(tc->mmd, dev, tc->msd + tc->nr_msd);
 	if (!r) {
 		*index= tc->nr_msd;
 		tc->nr_msd++;
@@ -365,13 +365,13 @@ static int check_open_bad_msd(void)
 {
 	int r;
 	struct test_context tc;
-	struct ms_device *msd;
+	struct dm_ms_device *msd;
 
 	r = setup_fresh_mmd(&tc);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_open_device(tc.mmd, 0, &msd);
+	r = dm_multisnap_metadata_open_device(tc.mmd, 0, &msd);
 	if (!r) {
 		printk(KERN_ALERT "open msd unexpectedly succeeded");
 		return -1;
@@ -394,21 +394,21 @@ static int check_create_thin_msd(void)
 static int check_open_thin_msd(void)
 {
 	int r;
-	struct ms_device *msd;
+	struct dm_ms_device *msd;
 	struct test_context tc;
 
 	r = setup_fresh_mmd_and_thin(&tc, 0);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_open_device(tc.mmd, 0, &msd);
+	r = dm_multisnap_metadata_open_device(tc.mmd, 0, &msd);
 	if (r) {
 		printk(KERN_ALERT "mmd_open_device failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_close_device(msd);
+	r = dm_multisnap_metadata_close_device(msd);
 	if (r) {
 		printk(KERN_ALERT "mmd_close_device failed");
 		destroy_mmd(&tc);
@@ -421,29 +421,29 @@ static int check_open_thin_msd(void)
 static int check_open_msd_twice_fails(void)
 {
 	int r;
-	struct ms_device *msd, *msd2;
+	struct dm_ms_device *msd, *msd2;
 	struct test_context tc;
 
 	r = setup_fresh_mmd_and_thin(&tc, 0);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_open_device(tc.mmd, 0, &msd);
+	r = dm_multisnap_metadata_open_device(tc.mmd, 0, &msd);
 	if (r) {
 		printk(KERN_ALERT "mmd_open_device failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_open_device(tc.mmd, 0, &msd2);
+	r = dm_multisnap_metadata_open_device(tc.mmd, 0, &msd2);
 	if (!r) {
 		printk(KERN_ALERT "mmd_open_device (for the second time) unexpected succeeded");
-		multisnap_metadata_close_device(msd);
+		dm_multisnap_metadata_close_device(msd);
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_close_device(msd);
+	r = dm_multisnap_metadata_close_device(msd);
 	if (r) {
 		printk(KERN_ALERT "mmd_close_device failed");
 		destroy_mmd(&tc);
@@ -456,14 +456,14 @@ static int check_open_msd_twice_fails(void)
 static int check_mmd_close_with_open_msd_fails(void)
 {
 	int r;
-	struct ms_device *msd;
+	struct dm_ms_device *msd;
 	struct test_context tc;
 
 	r = setup_fresh_mmd_and_thin(&tc, 0);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_open_device(tc.mmd, 0, &msd);
+	r = dm_multisnap_metadata_open_device(tc.mmd, 0, &msd);
 	if (r) {
 		printk(KERN_ALERT "mmd_open_device failed");
 		destroy_mmd(&tc);
@@ -477,7 +477,7 @@ static int check_mmd_close_with_open_msd_fails(void)
 	}
 
 	/* tidy */
-	r = multisnap_metadata_close_device(msd);
+	r = dm_multisnap_metadata_close_device(msd);
 	if (r) {
 		printk(KERN_ALERT "mmd_close_device failed");
 		destroy_mmd(&tc);
@@ -496,7 +496,7 @@ static int check_delete_msd(void)
 	if (r)
 		return r;
 
-	r = multisnap_metadata_delete(tc.mmd, 0);
+	r = dm_multisnap_metadata_delete_device(tc.mmd, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_delete failed");
 		destroy_mmd(&tc);
@@ -509,24 +509,24 @@ static int check_delete_msd(void)
 static int check_open_of_deleted_msd_fails(void)
 {
 	int r;
-	struct ms_device *msd;
+	struct dm_ms_device *msd;
 	struct test_context tc;
 
 	r = setup_fresh_mmd_and_thin(&tc, 0);
 	if (r)
 		return r;
 
-	r = multisnap_metadata_delete(tc.mmd, 0);
+	r = dm_multisnap_metadata_delete_device(tc.mmd, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_delete failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_open_device(tc.mmd, 0, &msd);
+	r = dm_multisnap_metadata_open_device(tc.mmd, 0, &msd);
 	if (!r) {
 		printk(KERN_ALERT "mmd open_device unexpectedly succeeded");
-		multisnap_metadata_close_device(msd);
+		dm_multisnap_metadata_close_device(msd);
 		destroy_mmd(&tc);
 		return -1;
 	}
@@ -773,7 +773,7 @@ static int check_create_snapshot(void)
 	if (r)
 		return r;
 
-	r = multisnap_metadata_create_snap(tc.mmd, 1, 0);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, 1, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -803,7 +803,7 @@ static int check_fresh_snapshot_has_same_mappings(void)
 		}
 	}
 
-	r = multisnap_metadata_create_snap(tc.mmd, 1, 0);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, 1, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -874,7 +874,7 @@ static int check_snap_scenario1(void)
 		return r;
 	}
 
-	r = multisnap_metadata_create_snap(tc.mmd, 1, 0);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, 1, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -995,7 +995,7 @@ static int check_snap_scenario2(void)
 	}
 
 	/* 1 */
-	r = multisnap_metadata_create_snap(tc.mmd, 1, 0);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, 1, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -1003,7 +1003,7 @@ static int check_snap_scenario2(void)
 	}
 
 	/* 2 */
-	r = multisnap_metadata_create_snap(tc.mmd, 2, 1);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, 2, 1);
 	if (r) {
 		printk(KERN_ALERT "snapshot of snapshot failed");
 		destroy_mmd(&tc);
@@ -1031,7 +1031,7 @@ static int check_snap_scenario2(void)
 	}
 
 	/* 4 */
-	r = multisnap_metadata_create_snap(tc.mmd, 3, 1);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, 3, 1);
 	if (r) {
 		printk(KERN_ALERT "snapshot of snapshot failed");
 		destroy_mmd(&tc);
@@ -1131,7 +1131,7 @@ static int check_snap_scenario3(void)
 	}
 
 	/* 1 */
-	r = multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -1139,7 +1139,7 @@ static int check_snap_scenario3(void)
 	}
 
 	/* 2 */
-	r = multisnap_metadata_create_snap(tc.mmd, snap2_dev, 1);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap2_dev, 1);
 	if (r) {
 		printk(KERN_ALERT "snapshot of snapshot failed");
 		destroy_mmd(&tc);
@@ -1269,7 +1269,7 @@ static int check_snap_scenario4(void)
 	}
 
 	/* 1 */
-	r = multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -1297,7 +1297,7 @@ static int check_snap_scenario4(void)
 	}
 
 	/* 3 */
-	r = multisnap_metadata_create_snap(tc.mmd, snap2_dev, snap1_dev);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap2_dev, snap1_dev);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -1325,7 +1325,7 @@ static int check_snap_scenario4(void)
 	}
 
 	/* 5 */
-	r = multisnap_metadata_create_snap(tc.mmd, snap3_dev, snap1_dev);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap3_dev, snap1_dev);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -1410,14 +1410,14 @@ static int check_snap_scenario5(void)
 	}
 
 	/* 1 */
-	r = multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap1_dev, 0);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
 		return r;
 	}
 
-	r = multisnap_metadata_create_snap(tc.mmd, snap2_dev, snap1_dev);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap2_dev, snap1_dev);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -1445,7 +1445,7 @@ static int check_snap_scenario5(void)
 	}
 
 	/* 3 */
-	r = multisnap_metadata_create_snap(tc.mmd, snap3_dev, snap2_dev);
+	r = dm_multisnap_metadata_create_snap(tc.mmd, snap3_dev, snap2_dev);
 	if (r) {
 		printk(KERN_ALERT "mmd_create_snap failed");
 		destroy_mmd(&tc);
@@ -1593,7 +1593,7 @@ static int check_devices_persist(void)
 		return r;
 	}
 
-	r = multisnap_metadata_commit(tc.mmd);
+	r = dm_multisnap_metadata_commit(tc.mmd);
 	if (r) {
 		printk(KERN_ALERT "commit failed");
 		destroy_mmd(&tc);

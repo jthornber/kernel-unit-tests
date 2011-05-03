@@ -1,14 +1,20 @@
 This project builds several kernel modules that run unit tests when
 they are insmodded into the kernel.  BEWARE: some of these tests make
-assumptions about which block devices they can scribble over.
+assumptions about which block devices they can scribble over (/dev/sdb).
 
 You should place a symbolic link in this directory to the md directory
 of your linux source.
 
 For example,
 
- ln -s ~/work/RedHat/linux-github/drivers/md md
+ LINUX_SRC=~/work/RedHat/linux-github
+ ln -s $LINUX_SRC/drivers/md .
+
+ # hack to allow multisnap-metadata-test access to dm_multisnap_metadata_* symbols:
+ ln -s md/persistent-data .
+ ln -s $LINUX_SRC/drivers/md/dm-multisnap-metadata.c .
+ ln -s $LINUX_SRC/drivers/md/dm-multisnap-metadata.h .
 
 Build with something like:
 
- make -C ~/work/RedHat/linux-github/ SUBDIRS=$PWD
+ make -C $LINUX_SRC SUBDIRS=$PWD
