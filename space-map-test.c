@@ -4,10 +4,10 @@
 #include <linux/blkdev.h>
 
 #include "md/persistent-data/dm-space-map.h"
-#include "md/persistent-data/dm-space-map-core.h"
 #include "md/persistent-data/dm-space-map-disk.h"
 #include "md/persistent-data/dm-space-map-staged.h"
 #include "md/persistent-data/dm-transaction-manager.h"
+#include "dm-space-map-core.h"
 
 /*----------------------------------------------------------------*/
 

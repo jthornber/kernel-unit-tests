@@ -5,7 +5,7 @@
 
 #include "md/persistent-data/dm-btree.h"
 #include "md/persistent-data/dm-transaction-manager.h"
-#include "md/persistent-data/dm-space-map-core.h"
+#include "dm-space-map-core.h"
 
 /*----------------------------------------------------------------*/
 
