@@ -104,8 +104,7 @@ static int with_block(const char *path, dm_block_t blk,
 		       __func__);
 	else {
 		fn(context, dm_block_data(b));
-		dm_bm_unlock(b);
-		r = dm_bm_flush(bm, 1);
+		dm_bm_flush_and_unlock(bm, b);
 	}
 
 	dm_block_manager_destroy(bm);
