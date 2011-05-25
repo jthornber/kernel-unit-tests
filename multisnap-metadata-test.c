@@ -550,12 +550,6 @@ static int check_empty_msd_lookup_fails(void)
 		return -1;
 	}
 
-	if (mapping.need_copy) {
-		printk(KERN_ALERT "clone unexpectedly set");
-		destroy_mmd(&tc);
-		return -1;
-	}
-
 	return destroy_mmd(&tc);
 }
 

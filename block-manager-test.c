@@ -129,8 +129,6 @@ static int windowed_writes(struct dm_block_manager *bm)
 			barf("dm_bm_unlock");
 	}
 
-	dm_bm_flush(bm, 1);
-
 	for (bi = 0; bi < NR_BLOCKS; bi++) {
 		struct dm_block *blk;
 

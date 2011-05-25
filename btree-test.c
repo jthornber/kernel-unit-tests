@@ -116,7 +116,7 @@ static int check_insert_commit_every(struct dm_transaction_manager *tm,
 		key = next_rand(value);
 		value = next_rand(key);
 
-		r = dm_btree_lookup_equal(&info, root, &key, &value2);
+		r = dm_btree_lookup(&info, root, &key, &value2);
 		if (r < 0)
 			return r;
 
@@ -167,7 +167,7 @@ static int check_lookup_empty(struct dm_transaction_manager *tm)
 		return r;
 	}
 
-	r = dm_btree_lookup_equal(&info, root, &key, &value);
+	r = dm_btree_lookup(&info, root, &key, &value);
 	if (r == 0) {
 		printk(KERN_ALERT "value unexpectedly found");
 		return -1;
@@ -235,9 +235,9 @@ static int check_insert_h(struct dm_transaction_manager *tm)
 	commit(tm, superblock);
 
 	for (i = 0; i < sizeof(table) / sizeof(*table); i++) {
-		r = dm_btree_lookup_equal(&info, root, table[i], &value);
+		r = dm_btree_lookup(&info, root, table[i], &value);
 		if (r < 0) {
-			printk(KERN_ALERT "btree_lookup_equal failed");
+			printk(KERN_ALERT "btree_lookup failed");
 			return r;
 		}
 
@@ -263,9 +263,9 @@ static int check_insert_h(struct dm_transaction_manager *tm)
 
 		commit(tm, superblock);
 
-		r = dm_btree_lookup_equal(&info, root, keys, &value);
+		r = dm_btree_lookup(&info, root, keys, &value);
 		if (r < 0) {
-			printk(KERN_ALERT "btree_lookup_equal failed");
+			printk(KERN_ALERT "btree_lookup failed");
 			return r;
 		}
 
@@ -287,9 +287,9 @@ static int check_insert_h(struct dm_transaction_manager *tm)
 	commit(tm, superblock);
 
 	for (i = 0; i < sizeof(overwrites) / sizeof(*overwrites); i++) {
-		r = dm_btree_lookup_equal(&info, root, overwrites[i], &value);
+		r = dm_btree_lookup(&info, root, overwrites[i], &value);
 		if (r < 0) {
-			printk(KERN_ALERT "btree_lookup_equal failed");
+			printk(KERN_ALERT "btree_lookup failed");
 			return r;
 		}
 
@@ -350,7 +350,7 @@ static int do_remove_scenario(struct dm_btree_info *info, dm_block_t root)
 		return -1;
 	}
 
-	r = dm_btree_lookup_equal(info, root, key, &value);
+	r = dm_btree_lookup(info, root, key, &value);
 	if (r == 0) {
 		printk(KERN_ALERT "value unexpectedly found");
 		return -1;
@@ -519,7 +519,7 @@ static int insert_remove_many_scenario(
 	for (check = c + 1; check < count; check++) {
 		uint64_t k = order[check];
 		void *value;
-		r = dm_btree_lookup_equal(&info, root, &k, &value);
+		r = dm_btree_lookup(&info, root, &k, &value);
 		if (r) {
 			printk(KERN_ALERT "missing %d", order[check]);
 			return r;
@@ -537,14 +537,14 @@ static int insert_remove_many_scenario(
 
 		for (check = c + 1; check < count; check++) {
 			uint64_t k = order[check];
-			r = dm_btree_lookup_equal(&info, root, &k, &value);
+			r = dm_btree_lookup(&info, root, &k, &value);
 			if (r) {
 				printk(KERN_ALERT "remove(%u) also removed %d", order[c], order[check]);
 				return r;
 			}
 		}
 
-		r = dm_btree_lookup_equal(&info, root, &k, &value);
+		r = dm_btree_lookup(&info, root, &k, &value);
 		if (!r) {
 			printk(KERN_ALERT "remove didn't work for %d", order[c]);
 			return -1;
