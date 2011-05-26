@@ -10,9 +10,9 @@ struct sm_core {
 	uint32_t counts[0];
 };
 
-static void sm_core_destroy(void *context)
+static void sm_core_destroy(struct dm_space_map *sm)
 {
-	struct sm_core *sm = (struct sm_core *) context;
+	kfree(sm->context);
 	kfree(sm);
 }
 
